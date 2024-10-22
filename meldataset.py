@@ -14,15 +14,48 @@ import torch.nn.functional as F
 import torchaudio
 from torch.utils.data import DataLoader
 
-from g2p_en import G2p
-
 import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-from text_utils import TextCleaner
+
 np.random.seed(1)
 random.seed(1)
-DEFAULT_DICT_PATH = osp.join(osp.dirname(__file__), 'word_index_dict.txt')
+
+_pad = "$"
+_punctuation = ';:,.!?¡¿—…\'"«»“”()-=^&*~ '
+_letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+_letters_ipa = "ɑɐɒæɓʙβɔɕçɗɖðʤəɘɚɛɜɝɞɟʄɡɠɢʛɦɧħɥʜɨɪʝɭɬɫɮʟɱɯɰŋɳɲɴøɵɸθœɶʘɹɺɾɻʀʁɽʂʃʈʧʉʊʋⱱʌɣɤʍχʎʏʑʐʒʔʡʕʢǀǁǂǃˈˌːˑʼʴʰʱʲʷˠˤ˞↓↑→↗↘'̩'ᵻ"
+
+_letters_jp = ['by', 'ch', 'cl', 'd', 'dy', 'gy', 'hy', 'ky', 'my', 'ny', 'pau', 'py', 'ry', 'sh', 'ts', 'ty']
+
+_letter_ko_JAMO_LEADS = "".join([chr(_) for _ in range(0x1100, 0x1113)])
+_letter_ko_JAMO_VOWELS = "".join([chr(_) for _ in range(0x1161, 0x1176)])
+_letter_ko_JAMO_TAILS = "".join([chr(_) for _ in range(0x11A8, 0x11C3)])
+_letter_ko_CHARS = _letter_ko_JAMO_LEADS + _letter_ko_JAMO_VOWELS + _letter_ko_JAMO_TAILS
+
+symbols = [_pad] + list(_punctuation) + list(_letters) + list(_letters_ipa) + _letters_jp + list(_letter_ko_CHARS)
+
+#---
+dicts = {}
+for i in range(len((symbols))):
+    dicts[symbols[i]] = i
+
+class TextCleaner:
+    def __init__(self, dummy=None):
+        self.word_index_dictionary = dicts
+    def __call__(self, text):
+        indexes = []
+        if text[:4] == '<jp>':
+            text = text[4:].split()
+        for char in text:
+            try:
+                indexes.append(self.word_index_dictionary[char])
+            except KeyError:
+                print(f"Unknown character: {char}")
+                print(text)
+        return indexes
+
+
 SPECT_PARAMS = {
     "n_fft": 2048,
     "win_length": 1200,
@@ -38,22 +71,22 @@ MEL_PARAMS = {
 class MelDataset(torch.utils.data.Dataset):
     def __init__(self,
                  data_list,
-                 dict_path=DEFAULT_DICT_PATH,
-                 sr=24000
+                 sr=24000,
+                 root_path=None,
                 ):
 
         spect_params = SPECT_PARAMS
         mel_params = MEL_PARAMS
 
-        _data_list = [l[:-1].split('|') for l in data_list]
+        _data_list = [l.strip().split('|') for l in data_list]
         self.data_list = [data if len(data) == 3 else (*data, 0) for data in _data_list]
-        self.text_cleaner = TextCleaner(dict_path)
+        self.text_cleaner = TextCleaner()
         self.sr = sr
 
         self.to_melspec = torchaudio.transforms.MelSpectrogram(**MEL_PARAMS)
         self.mean, self.std = -4, 4
         
-        self.g2p = G2p()
+        self.root_path = root_path
 
     def __len__(self):
         return len(self.data_list)
@@ -78,23 +111,19 @@ class MelDataset(torch.utils.data.Dataset):
 
     def _load_tensor(self, data):
         wave_path, text, speaker_id = data
-        speaker_id = int(speaker_id)
-        wave, sr = sf.read(wave_path)
+        wave, sr = sf.read(os.path.join(self.root_path, wave_path))
 
         # phonemize the text
-        ps = self.g2p(text.replace('-', ' '))
+        ps = text
         if "'" in ps:
             ps.remove("'")
         text = self.text_cleaner(ps)
-        blank_index = self.text_cleaner.word_index_dictionary[" "]
-        text.insert(0, blank_index) # add a blank at the beginning (silence)
-        text.append(blank_index) # add a blank at the end (silence)
+        text.insert(0, 0) # add a blank at the beginning (silence)
+        text.append(0) # add a blank at the end (silence)
         
         text = torch.LongTensor(text)
 
         return wave, text, speaker_id
-
-
 
 
 class Collater(object):
@@ -141,7 +170,6 @@ class Collater(object):
         return texts, input_lengths, mels, output_lengths
 
 
-
 def build_dataloader(path_list,
                      validation=False,
                      batch_size=4,
@@ -150,6 +178,7 @@ def build_dataloader(path_list,
                      collate_config={},
                      dataset_config={}):
 
+    print(f'dataset_config is: {dataset_config}')
     dataset = MelDataset(path_list, **dataset_config)
     collate_fn = Collater(**collate_config)
     data_loader = DataLoader(dataset,
