@@ -93,6 +93,10 @@ def main(config_path):
     if config.get('pretrained_model', '') != '':
         trainer.load_checkpoint(config['pretrained_model'],
                                 load_only_params=config.get('load_only_params', True))
+        print('Loaded pretrained model from %s' % config['pretrained_model'])
+        print('Load only params: %s' % config.get('load_only_params', True))
+        print('Start training from epoch %d' % (trainer.epochs + 1))
+        
 
     for epoch in range(1, epochs+1):
         train_results = trainer._train_epoch()

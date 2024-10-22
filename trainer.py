@@ -84,6 +84,8 @@ class Trainer(object):
             # overwrite schedular argument parameters
             state_dict["scheduler"].update(**self.config.get("scheduler_params", {}))
             self.scheduler.load_state_dict(state_dict["scheduler"])
+            print("Loaded checkpoint %s" % checkpoint_path)
+            print("Steps: %d, Epochs: %d" % (self.steps, self.epochs))
 
     def _load(self, states, model, force_load=True):
         model_states = model.state_dict()
@@ -187,9 +189,11 @@ class Trainer(object):
             losses = self.run(batch)
             for key, value in losses.items():
                 train_losses["train/%s" % key].append(value)
+            self.steps += 1
 
         train_losses = {key: np.mean(value) for key, value in train_losses.items()}
         train_losses['train/learning_rate'] = self._get_lr()
+        self.epochs += 1
         return train_losses
 
     @torch.no_grad()
